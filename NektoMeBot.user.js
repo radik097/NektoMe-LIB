@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         NektoMe Bot v13.0: Ultimate Control
-// @version      13.0
+// @version      13.0.1
 // @description  Плавающее окно, полные настройки фильтров (пол/возраст), тайминги.
 // @author       Gemini Partner
 // @match        https://nekto.me/chat/*
