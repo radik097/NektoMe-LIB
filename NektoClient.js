@@ -1,6 +1,6 @@
 /**
  * NektoClient - API Wrapper for UserScripts
- * Version: 3.0 (Added caching and next() method)
+ * Version: 3.1 (Fix: Correct API Endpoint 405 Error)
  * Author: Gemini Partner & Radik
  * Repository: https://github.com/radik097/NektoMe-LIB
  */
@@ -37,12 +37,13 @@ class NektoClient {
 
     // --- Low Level API ---
     async _request(action, data = {}) {
-        data.action = action;
+        data.action = action; // Action is passed in BODY, not URL
         const formData = new URLSearchParams();
         for (const key in data) formData.append(key, data[key]);
 
         try {
-            const res = await fetch(`${this.baseUrl}/${action}`, {
+            // FIX: Request goes to constant baseUrl, not baseUrl/action
+            const res = await fetch(this.baseUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -51,7 +52,15 @@ class NektoClient {
                 },
                 body: formData
             });
-            return await res.json();
+            
+            // Handle non-JSON responses (like 405/500 HTML errors)
+            const text = await res.text();
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error(`[NektoClient] Invalid JSON response for ${action}:`, text.substring(0, 100));
+                throw new Error('Server returned invalid JSON (possibly 405/500 error)');
+            }
         } catch (e) {
             console.error(`NektoClient Error [${action}]:`, e);
             this.trigger('onError', e);
@@ -69,16 +78,10 @@ class NektoClient {
 
     // --- Main Actions ---
 
-    /**
-     * Start a NEW search with specific parameters.
-     * Saves these parameters for future .next() calls.
-     */
     async startSearch(params = {}) {
-        // Stop any active processes
         this.stop(); 
         this.isSearching = true;
 
-        // Prepare defaults or use cached params if partial
         const defaultParams = {
             mySex: 'M',
             myAge: 22,
@@ -87,15 +90,12 @@ class NektoClient {
             topic: 'adult'
         };
 
-        // If params provided, merge with defaults. If empty, use lastParams or defaults.
         const effectiveParams = Object.keys(params).length > 0 
             ? { ...defaultParams, ...params }
             : (this.lastParams || defaultParams);
 
-        // Cache for next() calls
         this.lastParams = effectiveParams;
 
-        // Convert params to API format
         const myAgeId = this._getAgeId(effectiveParams.myAge);
         let selage = '1';
         if (Array.isArray(effectiveParams.wishAges)) {
@@ -105,7 +105,6 @@ class NektoClient {
         }
 
         const payload = {
-            action: 'search_company',
             mysex: effectiveParams.mySex,
             myselage: myAgeId, 
             sex: effectiveParams.wishSex,
@@ -117,15 +116,12 @@ class NektoClient {
         console.log('[NektoClient] Searching:', payload);
 
         // 1. Send Search Request
-        const res = await this._request('search_company', payload);
+        await this._request('search_company', payload);
         
         // 2. Start Polling Loop
         this._startPolling();
     }
 
-    /**
-     * Stop current chat/search and find NEXT partner using cached settings.
-     */
     async next() {
         if (!this.lastParams) {
             console.warn('[NektoClient] No previous settings found. Using defaults.');
@@ -133,9 +129,6 @@ class NektoClient {
         await this.startSearch(this.lastParams || {});
     }
 
-    /**
-     * Send a text message
-     */
     async sendMessage(text) {
         if (!this.chatId) return false;
         await this._request('send_message', {
@@ -146,9 +139,6 @@ class NektoClient {
         return true;
     }
 
-    /**
-     * Stop everything: disconnect chat and stop searching.
-     */
     stop() {
         this.isSearching = false;
         if (this.chatId) {
@@ -189,9 +179,8 @@ class NektoClient {
 
             // 2. Partner Left / Chat Closed
             if (res.notice === 'leaved' || res.status === 'closed') {
-                this.chatId = null; // Don't call stop() here fully, just reset chat ID
+                this.chatId = null;
                 this.trigger('onDisconnect');
-                // Don't auto-search here inside lib, let the main script decide via .next()
                 return;
             }
 
