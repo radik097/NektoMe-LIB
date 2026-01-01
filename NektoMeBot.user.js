@@ -11,7 +11,7 @@
 // @require      https://raw.githubusercontent.com/radik097/nektome-lib/refs/heads/main/NektoClient.js?v=4.2
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     if (typeof NektoClient === 'undefined') {
@@ -26,14 +26,14 @@
         autoNext: GM_getValue('autoNext', true),
         replyDelay: GM_getValue('replyDelay', 1500),
         searchDelay: GM_getValue('searchDelay', 2000),
-        
+
         // Параметры поиска
         mySex: GM_getValue('mySex', 'M'),
         myAge: GM_getValue('myAge', '18-25'), // 18-25, 26-35, 36+
         wishSex: GM_getValue('wishSex', 'F'),
         wishAge: GM_getValue('wishAge', '18-25'),
         topic: GM_getValue('topic', 'adult'),
-        
+
         // UI
         posX: GM_getValue('posX', '20px'),
         posY: GM_getValue('posY', '80px')
@@ -291,7 +291,7 @@
         // Persist
         for (const key in SETTINGS) GM_setValue(key, SETTINGS[key]);
     };
-    
+
     // Bind change events
     [UI.mySex, UI.myAge, UI.wishSex, UI.wishAge, UI.topic, UI.text, UI.auto, UI.rngReply, UI.rngSearch]
         .forEach(el => el.onchange = save);
@@ -304,7 +304,7 @@
         const container = document.querySelector(containerSelector);
         if (!container) return;
         const buttons = container.querySelectorAll('button');
-        
+
         // Поиск по тексту (например "18-25") или по атрибутам
         for (let btn of buttons) {
             const txt = btn.innerText.trim();
@@ -321,6 +321,36 @@
         if (!document.querySelector('.topicRow')) return;
 
         UI.status.innerText = "APPLYING FILTERS...";
-        
+
         // 1. Тема (.topicRow)
-        clickByText
+        clickByText('.topicRow', SETTINGS.topic);
+
+        // 2. Пол и возраст
+        clickByText('.sexRow', SETTINGS.mySex);
+        clickByText('.ageRow', SETTINGS.myAge);
+
+        // 3. Желаемый пол и возраст
+        clickByText('.wishSexRow', SETTINGS.wishSex);
+        clickByText('.wishAgeRow', SETTINGS.wishAge);
+
+        // 4. Авто-следующий
+        UI.auto.checked = SETTINGS.autoNext;
+
+        // 5. Задержка ответа
+        UI.rngReply.value = SETTINGS.replyDelay;
+        UI.valReply.innerText = SETTINGS.replyDelay + ' ms';
+
+        // 6. Задержка поиска
+        UI.rngSearch.value = SETTINGS.searchDelay;
+        UI.valSearch.innerText = SETTINGS.searchDelay + ' ms';
+
+        // 7. Текст ответа
+        UI.text.value = SETTINGS.replyText;
+
+        // 8. Сохранение
+        save();
+
+        UI.status.innerText = "FILTERS APPLIED!";
+    };
+
+})();
