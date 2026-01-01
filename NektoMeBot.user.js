@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         NektoMe Bot v11.0: Ultimate UI
-// @version      11.0
-// @description  Красивый интерфейс, анимации, детальные настройки. Работает на NektoClient v4.0.
+// @name         NektoMe Bot v12.0: Draggable & Filters
+// @version      12.0
+// @description  Плавающее меню, настройка фильтров поиска, авто-ответ.
 // @author       Gemini Partner
 // @match        https://nekto.me/chat/*
 // @grant        GM_setValue
@@ -14,293 +14,338 @@
 (function() {
     'use strict';
 
-    // --- ПРОВЕРКА БИБЛИОТЕКИ ---
     if (typeof NektoClient === 'undefined') {
-        alert('Ошибка: NektoClient не загружен! Проверьте интернет или GitHub.');
+        alert('NektoClient lib not loaded!');
         return;
     }
 
-    // --- КОНФИГУРАЦИЯ (Сохранение настроек) ---
+    // --- НАСТРОЙКИ (Default) ---
     const SETTINGS = {
-        replyText: GM_getValue('replyText', "Привет! 👋\nМ или Ж?"),
+        replyText: GM_getValue('replyText', "Привет! 👋"),
         autoNext: GM_getValue('autoNext', true),
-        replyDelay: GM_getValue('replyDelay', 1500),
-        searchDelay: GM_getValue('searchDelay', 2000),
-    };
-
-    // Статистика сессии
-    const STATS = {
-        chats: 0,
-        messagesSent: 0
+        mySex: GM_getValue('mySex', 'M'),
+        wishSex: GM_getValue('wishSex', 'F'),
+        topic: GM_getValue('topic', 'adult'), // adult, normal
+        posX: GM_getValue('posX', '20px'),
+        posY: GM_getValue('posY', '80px')
     };
 
     const client = new NektoClient();
     let hasReplied = false;
 
-    // --- CSS СТИЛИ (Glassmorphism + Animations) ---
+    // --- CSS: СТИЛЬНО И НЕЗАВИСИМО ---
     GM_addStyle(`
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@500;700&display=swap');
 
-        /* Кнопка открытия */
-        #nm-toggle-btn {
-            position: fixed; top: 100px; right: 20px; width: 50px; height: 50px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 50%; box-shadow: 0 4px 15px rgba(118, 75, 162, 0.4);
-            cursor: pointer; z-index: 99999; display: flex; align-items: center; justify-content: center;
-            font-size: 24px; color: white; transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            border: 2px solid rgba(255,255,255,0.2);
+        #nm-root {
+            position: fixed; z-index: 2147483647; font-family: 'Montserrat', sans-serif;
+            top: ${SETTINGS.posY}; left: ${SETTINGS.posX};
         }
-        #nm-toggle-btn:hover { transform: scale(1.1) rotate(15deg); }
+
+        /* Кнопка-открывашка (скрыта когда панель открыта) */
+        #nm-toggle {
+            width: 45px; height: 45px; background: #1e1e2e; border: 2px solid #89b4fa;
+            border-radius: 50%; color: #89b4fa; font-size: 20px;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5); transition: transform 0.2s;
+        }
+        #nm-toggle:hover { transform: scale(1.1); color: #fff; border-color: #fff; }
 
         /* Основная панель */
         #nm-panel {
-            position: fixed; top: 100px; right: -350px; width: 320px;
-            background: rgba(30, 30, 46, 0.85); backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px; padding: 20px; z-index: 99998;
-            font-family: 'Poppins', sans-serif; color: #fff;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-            display: flex; flex-direction: column; gap: 15px;
+            width: 300px; background: rgba(24, 24, 37, 0.95);
+            backdrop-filter: blur(10px); border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            display: none; flex-direction: column; overflow: hidden;
         }
 
-        /* Элементы UI */
-        .nm-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-        .nm-title { font-weight: 600; font-size: 18px; background: linear-gradient(to right, #a18cd1, #fbc2eb); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        
-        .nm-status-badge {
-            font-size: 10px; padding: 4px 8px; border-radius: 12px;
-            background: rgba(255,255,255,0.1); text-transform: uppercase; font-weight: 600; letter-spacing: 1px;
-            transition: all 0.3s;
+        /* Шапка (Drag Handle) */
+        .nm-header {
+            padding: 12px 15px; background: linear-gradient(90deg, #313244, #1e1e2e);
+            display: flex; justify-content: space-between; align-items: center;
+            cursor: grab; border-bottom: 1px solid rgba(255,255,255,0.05);
         }
-        .st-idle { color: #a6adc8; border: 1px solid #a6adc8; }
-        .st-active { color: #a6e3a1; border: 1px solid #a6e3a1; box-shadow: 0 0 10px rgba(166, 227, 161, 0.3); }
-        .st-stop { color: #f38ba8; border: 1px solid #f38ba8; }
+        .nm-header:active { cursor: grabbing; }
+        .nm-title { font-weight: 700; font-size: 14px; color: #cdd6f4; }
+        .nm-close { cursor: pointer; color: #f38ba8; font-weight: bold; }
 
-        .nm-input-group { display: flex; flex-direction: column; gap: 5px; }
-        .nm-label { font-size: 12px; color: #cdd6f4; opacity: 0.8; display: flex; justify-content: space-between; }
-        
-        textarea {
-            width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
-            color: #fff; border-radius: 10px; padding: 10px; min-height: 70px;
-            font-family: 'Poppins', sans-serif; font-size: 12px; resize: vertical;
-            outline: none; transition: border 0.2s;
+        /* Контент */
+        .nm-content { padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+
+        /* Группы настроек */
+        .nm-group { display: flex; gap: 5px; }
+        .nm-col { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+        .nm-label { font-size: 10px; color: #a6adc8; text-transform: uppercase; font-weight: bold; }
+
+        select, textarea, input[type=text] {
+            background: #11111b; border: 1px solid #45475a; color: #cdd6f4;
+            padding: 6px; border-radius: 6px; font-size: 11px; font-family: inherit;
+            outline: none; width: 100%; box-sizing: border-box;
         }
-        textarea:focus { border-color: #89b4fa; }
+        select:focus, textarea:focus { border-color: #89b4fa; }
 
-        input[type=range] { width: 100%; cursor: pointer; accent-color: #89b4fa; margin-top: 5px; }
+        textarea { min-height: 60px; resize: vertical; }
 
-        .nm-checkbox {
-            display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer;
-            padding: 8px; background: rgba(255,255,255,0.05); border-radius: 8px; transition: background 0.2s;
-        }
-        .nm-checkbox:hover { background: rgba(255,255,255,0.1); }
+        /* Чекбокс */
+        .nm-chk-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cdd6f4; cursor: pointer; }
+        .nm-chk-row input { accent-color: #89b4fa; }
 
-        .nm-stats-row { display: flex; justify-content: space-around; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 10px; margin-top: 5px; }
-        .nm-stat-item { text-align: center; font-size: 11px; color: #a6adc8; }
-        .nm-stat-val { display: block; font-size: 14px; font-weight: 600; color: #fff; }
-
-        .nm-controls { display: flex; gap: 10px; margin-top: 10px; }
+        /* Кнопки */
+        .nm-btns { display: flex; gap: 8px; margin-top: 5px; }
         .nm-btn {
-            flex: 1; padding: 12px; border: none; border-radius: 12px;
-            font-weight: 600; cursor: pointer; font-size: 14px;
-            transition: transform 0.1s, opacity 0.2s;
-            color: #1e1e2e;
+            flex: 1; padding: 10px; border: none; border-radius: 8px; font-weight: 700;
+            cursor: pointer; font-size: 12px; transition: opacity 0.2s; color: #11111b;
         }
-        .nm-btn:active { transform: scale(0.95); }
-        .btn-start { background: linear-gradient(135deg, #a6e3a1 0%, #94e2d5 100%); }
-        .btn-stop { background: linear-gradient(135deg, #f38ba8 0%, #eba0ac 100%); display: none; }
-        .btn-next { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); }
-        .btn-next:hover { background: rgba(255,255,255,0.2); }
+        .nm-btn:hover { opacity: 0.9; }
+        .btn-start { background: #a6e3a1; }
+        .btn-stop { background: #f38ba8; display: none; }
+        .btn-skip { background: #fab387; }
 
+        /* Статус */
+        .nm-status-bar {
+            font-size: 10px; text-align: center; padding: 4px; margin-top: 5px;
+            border-radius: 4px; background: #313244; color: #a6adc8;
+        }
+        .st-active { color: #a6e3a1; border: 1px solid #a6e3a1; }
     `);
 
-    // --- HTML СТРУКТУРА ---
+    // --- HTML ---
     const root = document.createElement('div');
+    root.id = 'nm-root';
     root.innerHTML = `
-        <div id="nm-toggle-btn">🤖</div>
+        <div id="nm-toggle">⚙️</div>
         <div id="nm-panel">
-            <div class="nm-header">
-                <span class="nm-title">Bot Ultimate</span>
-                <span id="nm-status" class="nm-status-badge st-idle">IDLE</span>
+            <div class="nm-header" id="nm-drag">
+                <span class="nm-title">NektoMe Bot v12</span>
+                <span class="nm-close" id="nm-hide">✖</span>
             </div>
+            <div class="nm-content">
+                
+                <div class="nm-group">
+                    <div class="nm-col">
+                        <label class="nm-label">Я</label>
+                        <select id="nm-my-sex">
+                            <option value="M">Парень</option>
+                            <option value="F">Девушка</option>
+                        </select>
+                    </div>
+                    <div class="nm-col">
+                        <label class="nm-label">Ищу</label>
+                        <select id="nm-wish-sex">
+                            <option value="F">Девушку</option>
+                            <option value="M">Парня</option>
+                        </select>
+                    </div>
+                </div>
 
-            <div class="nm-stats-row">
-                <div class="nm-stat-item"><span class="nm-stat-val" id="st-chats">0</span>Chats</div>
-                <div class="nm-stat-item"><span class="nm-stat-val" id="st-msgs">0</span>Sent</div>
-            </div>
+                <div class="nm-col">
+                    <label class="nm-label">Тема</label>
+                    <select id="nm-topic">
+                        <option value="adult">Пошлое (18+)</option>
+                        <option value="normal">Обычное</option>
+                    </select>
+                </div>
 
-            <div class="nm-input-group">
-                <div class="nm-label">Первое сообщение</div>
-                <textarea id="nm-text" placeholder="Введите текст...">${SETTINGS.replyText}</textarea>
-            </div>
+                <hr style="border: 0; border-top: 1px solid #45475a; width: 100%;">
 
-            <div class="nm-input-group">
-                <div class="nm-label">Задержка ответа: <span id="val-reply">${SETTINGS.replyDelay}</span>ms</div>
-                <input type="range" id="rng-reply" min="100" max="5000" step="100" value="${SETTINGS.replyDelay}">
-            </div>
+                <div class="nm-col">
+                    <label class="nm-label">Авто-ответ</label>
+                    <textarea id="nm-text">${SETTINGS.replyText}</textarea>
+                </div>
 
-            <div class="nm-input-group">
-                <div class="nm-label">Задержка поиска: <span id="val-search">${SETTINGS.searchDelay}</span>ms</div>
-                <input type="range" id="rng-search" min="500" max="5000" step="100" value="${SETTINGS.searchDelay}">
-            </div>
+                <label class="nm-chk-row">
+                    <input type="checkbox" id="nm-auto" ${SETTINGS.autoNext ? 'checked' : ''}>
+                    Авто-поиск (Auto Next)
+                </label>
 
-            <label class="nm-checkbox">
-                <input type="checkbox" id="chk-auto" ${SETTINGS.autoNext ? 'checked' : ''}>
-                <span>Авто-поиск следующего (Auto Next)</span>
-            </label>
+                <div class="nm-status-bar" id="nm-status">IDLE</div>
 
-            <div class="nm-controls">
-                <button id="btn-start" class="nm-btn btn-start">ЗАПУСК</button>
-                <button id="btn-stop" class="nm-btn btn-stop">СТОП</button>
-                <button id="btn-skip" class="nm-btn btn-next">SKIP ⏩</button>
+                <div class="nm-btns">
+                    <button id="btn-start" class="nm-btn btn-start">START</button>
+                    <button id="btn-stop" class="nm-btn btn-stop">STOP</button>
+                    <button id="btn-skip" class="nm-btn btn-skip">SKIP</button>
+                </div>
             </div>
         </div>
     `;
     document.body.appendChild(root);
 
-    // --- DOM ЭЛЕМЕНТЫ ---
+    // --- DOM Elements ---
     const UI = {
-        toggle: document.getElementById('nm-toggle-btn'),
+        root: document.getElementById('nm-root'),
+        toggle: document.getElementById('nm-toggle'),
         panel: document.getElementById('nm-panel'),
-        status: document.getElementById('nm-status'),
+        drag: document.getElementById('nm-drag'),
+        hide: document.getElementById('nm-hide'),
+        mySex: document.getElementById('nm-my-sex'),
+        wishSex: document.getElementById('nm-wish-sex'),
+        topic: document.getElementById('nm-topic'),
         text: document.getElementById('nm-text'),
-        chkAuto: document.getElementById('chk-auto'),
-        rngReply: document.getElementById('rng-reply'),
-        rngSearch: document.getElementById('rng-search'),
-        valReply: document.getElementById('val-reply'),
-        valSearch: document.getElementById('val-search'),
-        btnStart: document.getElementById('btn-start'),
-        btnStop: document.getElementById('btn-stop'),
-        btnSkip: document.getElementById('btn-skip'),
-        stChats: document.getElementById('st-chats'),
-        stMsgs: document.getElementById('st-msgs')
+        auto: document.getElementById('nm-auto'),
+        start: document.getElementById('btn-start'),
+        stop: document.getElementById('btn-stop'),
+        skip: document.getElementById('btn-skip'),
+        status: document.getElementById('nm-status')
     };
 
-    // --- АНИМАЦИЯ И ЛОГИКА UI ---
-    let isPanelOpen = false;
+    // Restore Selects
+    UI.mySex.value = SETTINGS.mySex;
+    UI.wishSex.value = SETTINGS.wishSex;
+    UI.topic.value = SETTINGS.topic;
 
+    // --- DRAG & DROP LOGIC ---
+    let isDragging = false;
+    let dragOffset = { x: 0, y: 0 };
+
+    UI.drag.onmousedown = (e) => {
+        isDragging = true;
+        dragOffset.x = e.clientX - UI.root.offsetLeft;
+        dragOffset.y = e.clientY - UI.root.offsetTop;
+        UI.drag.style.cursor = 'grabbing';
+    };
+
+    document.onmousemove = (e) => {
+        if (!isDragging) return;
+        const newLeft = e.clientX - dragOffset.x;
+        const newTop = e.clientY - dragOffset.y;
+        
+        UI.root.style.left = newLeft + 'px';
+        UI.root.style.top = newTop + 'px';
+    };
+
+    document.onmouseup = () => {
+        if (isDragging) {
+            isDragging = false;
+            UI.drag.style.cursor = 'grab';
+            // Save position
+            GM_setValue('posX', UI.root.style.left);
+            GM_setValue('posY', UI.root.style.top);
+        }
+    };
+
+    // --- UI TOGGLE ---
     UI.toggle.onclick = () => {
-        isPanelOpen = !isPanelOpen;
-        anime({
-            targets: UI.panel,
-            right: isPanelOpen ? 20 : -350,
-            duration: 600,
-            easing: 'easeOutElastic(1, .6)'
-        });
-        anime({
-            targets: UI.toggle,
-            rotate: isPanelOpen ? 180 : 0,
-            duration: 600
-        });
+        UI.toggle.style.display = 'none';
+        UI.panel.style.display = 'flex';
+        anime({ targets: UI.panel, scale: [0.9, 1], opacity: [0, 1], duration: 300, easing: 'easeOutQuad' });
+    };
+    UI.hide.onclick = () => {
+        UI.panel.style.display = 'none';
+        UI.toggle.style.display = 'flex';
     };
 
-    // Обновление значений слайдеров
-    UI.rngReply.oninput = (e) => {
-        SETTINGS.replyDelay = parseInt(e.target.value);
-        UI.valReply.innerText = SETTINGS.replyDelay;
-        GM_setValue('replyDelay', SETTINGS.replyDelay);
-    };
-    UI.rngSearch.oninput = (e) => {
-        SETTINGS.searchDelay = parseInt(e.target.value);
-        UI.valSearch.innerText = SETTINGS.searchDelay;
-        GM_setValue('searchDelay', SETTINGS.searchDelay);
-    };
-    UI.text.oninput = (e) => {
-        SETTINGS.replyText = e.target.value;
+    // --- SETTINGS EVENTS ---
+    const save = () => {
+        SETTINGS.mySex = UI.mySex.value;
+        SETTINGS.wishSex = UI.wishSex.value;
+        SETTINGS.topic = UI.topic.value;
+        SETTINGS.replyText = UI.text.value;
+        SETTINGS.autoNext = UI.auto.checked;
+        
+        GM_setValue('mySex', SETTINGS.mySex);
+        GM_setValue('wishSex', SETTINGS.wishSex);
+        GM_setValue('topic', SETTINGS.topic);
         GM_setValue('replyText', SETTINGS.replyText);
-    };
-    UI.chkAuto.onchange = (e) => {
-        SETTINGS.autoNext = e.target.checked;
         GM_setValue('autoNext', SETTINGS.autoNext);
     };
+    [UI.mySex, UI.wishSex, UI.topic, UI.text, UI.auto].forEach(el => el.onchange = save);
 
-    // Обновление статуса
-    const setStatus = (state, text) => {
-        UI.status.innerText = text;
-        UI.status.className = `nm-status-badge st-${state}`;
-        if (state === 'active') {
-            UI.btnStart.style.display = 'none';
-            UI.btnStop.style.display = 'block';
-        } else {
-            UI.btnStart.style.display = 'block';
-            UI.btnStop.style.display = 'none';
-        }
-    };
-
-    // --- ЛОГИКА БОТА ---
-
-    UI.btnStart.onclick = () => {
-        client.start(); //
-        setStatus('active', 'SEARCHING...');
-    };
-
-    UI.btnStop.onclick = () => {
-        client.stop(); //
-        setStatus('stop', 'STOPPED');
-    };
-
-    UI.btnSkip.onclick = () => {
-        client.skip(); //
-        STATS.chats++;
-        UI.stChats.innerText = STATS.chats;
-    };
-
-    // --- СОБЫТИЯ БИБЛИОТЕКИ ---
-
-    client.on('onConnect', (chatId) => {
-        console.log('[Bot] Connected:', chatId);
-        setStatus('active', 'CHATTING');
-        hasReplied = false;
-        STATS.chats++;
-        UI.stChats.innerText = STATS.chats;
-        
-        // Анимация бейджика
-        anime({
-            targets: UI.status,
-            scale: [1, 1.2, 1],
-            duration: 400
+    // --- DOM HELPERS (APPLY FILTERS) ---
+    // Функция нажимает кнопки на сайте согласно настройкам
+    const applyFilters = async () => {
+        // 1. Тема
+        const topicBtns = document.querySelectorAll('.topicRow button');
+        topicBtns.forEach(btn => {
+            const txt = btn.innerText.toLowerCase();
+            if (SETTINGS.topic === 'adult' && txt.includes('18+')) btn.click();
+            if (SETTINGS.topic === 'normal' && txt.includes('общение')) btn.click();
         });
-    });
 
-    client.on('onDisconnect', () => {
-        console.log('[Bot] Disconnected');
+        await new Promise(r => setTimeout(r, 100));
+
+        // 2. Мой пол
+        const mySexBtns = document.querySelectorAll('.sexRow .btn-group:first-child button');
+        mySexBtns.forEach(btn => {
+            if (btn.innerText.trim() === SETTINGS.mySex) btn.click();
+        });
+
+        // 3. Кого ищем
+        const wishSexBtns = document.querySelectorAll('.sexRow .wishSex button');
+        wishSexBtns.forEach(btn => {
+            if (btn.innerText.trim() === SETTINGS.wishSex) btn.click();
+        });
         
-        if (SETTINGS.autoNext) {
-            setStatus('active', `NEXT IN ${SETTINGS.searchDelay/1000}s`);
-            setTimeout(() => {
-                if (client.isRunning) {
-                    client.skip();
-                    setStatus('active', 'SEARCHING...');
-                }
-            }, SETTINGS.searchDelay);
+        UI.status.innerText = "FILTERS APPLIED";
+    };
+
+    // --- BOT LOGIC ---
+
+    const setView = (state) => {
+        if (state === 'running') {
+            UI.start.style.display = 'none';
+            UI.stop.style.display = 'block';
+            UI.status.classList.add('st-active');
         } else {
-            client.stop();
-            setStatus('idle', 'FINISHED');
+            UI.start.style.display = 'block';
+            UI.stop.style.display = 'none';
+            UI.status.classList.remove('st-active');
+            UI.status.innerText = "IDLE";
         }
+    };
+
+    UI.start.onclick = async () => {
+        // Сначала применяем фильтры (если мы на главной)
+        if (document.querySelector('.topicRow')) {
+            await applyFilters();
+        }
+        client.start();
+        setView('running');
+        UI.status.innerText = "SEARCHING...";
+    };
+
+    UI.stop.onclick = () => {
+        client.stop();
+        setView('stopped');
+    };
+
+    UI.skip.onclick = () => {
+        client.skip();
+    };
+
+    // --- CLIENT EVENTS ---
+
+    client.on('onConnect', (id) => {
+        UI.status.innerText = `CHAT: ${id}`;
+        hasReplied = false;
     });
 
     client.on('onMessage', (msg) => {
         if (!msg.isSelf && !hasReplied) {
-            console.log('[Bot] Incoming msg. Preparing reply...');
+            UI.status.innerText = "REPLYING...";
             hasReplied = true;
-            
-            setStatus('active', 'TYPING...');
-            
             setTimeout(() => {
                 if (client.isRunning) {
-                    client.sendMessage(SETTINGS.replyText); //
-                    STATS.messagesSent++;
-                    UI.stMsgs.innerText = STATS.messagesSent;
-                    setStatus('active', 'SENT');
+                    client.sendMessage(SETTINGS.replyText);
+                    UI.status.innerText = "SENT";
                 }
-            }, SETTINGS.replyDelay);
+            }, 1500);
         }
     });
 
-    client.on('onStatusChange', (status) => {
-        // Синхронизация статусов библиотеки с UI (опционально)
-        if (status === 'SEARCHING') setStatus('active', 'SEARCHING');
+    client.on('onDisconnect', () => {
+        UI.status.innerText = "DISCONNECTED";
+        if (SETTINGS.autoNext) {
+            setTimeout(() => {
+                if (client.isRunning) {
+                    client.skip();
+                    UI.status.innerText = "NEXT...";
+                }
+            }, 1500);
+        } else {
+            client.stop();
+            setView('stopped');
+        }
     });
 
 })();
