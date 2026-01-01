@@ -1,32 +1,39 @@
 /**
- * NektoClient - API Wrapper for UserScripts
- * Version: 3.1 (Fix: Correct API Endpoint 405 Error)
- * Author: Gemini Partner & Radik
- * Repository: https://github.com/radik097/NektoMe-LIB
+ * NektoClient - DOM Driver for UserScripts
+ * Version: 4.0 (DOM Manipulation & Event Emitter)
+ * Author: Gemini Partner
  */
 class NektoClient {
     constructor() {
-        this.baseUrl = 'https://nekto.me/api/action';
-        this.chatId = null;
-        this.myId = null;
-        this.lastMsgId = 0;
-        this.pollingInterval = null;
+        this.isRunning = false;
+        this.observer = null;
+        this.searchTimer = null;
         
-        // Cache for search settings
-        this.lastParams = null; 
-        
-        this.isSearching = false;
-        
+        // State tracking
+        this.isInChat = false;
+        this.lastMsgCount = 0;
+
         this.callbacks = {
-            onMessage: [],
             onConnect: [],
             onDisconnect: [],
-            onTyping: [],
-            onError: []
+            onMessage: [],
+            onStatusChange: []
+        };
+
+        // DOM Selectors Configuration
+        this.DOM = {
+            input: '.emojionearea-editor',
+            sendBtn: '#sendMessageBtn',
+            startBtn: '#searchCompanyBtn',
+            nextBtns: 'button, .talk_over_button', // Кнопки "Начать новый", "Искать"
+            msgBlock: '.mess_block',
+            chatStatus: '.window_chat_statuss',
+            endScreen: '.status-end',
+            selfMsgClass: 'self'
         };
     }
 
-    // --- Events System ---
+    // --- Event System ---
     on(event, callback) {
         if (this.callbacks[event]) this.callbacks[event].push(callback);
     }
@@ -35,170 +42,140 @@ class NektoClient {
         if (this.callbacks[event]) this.callbacks[event].forEach(cb => cb(data));
     }
 
-    // --- Low Level API ---
-    async _request(action, data = {}) {
-        data.action = action; // Action is passed in BODY, not URL
-        const formData = new URLSearchParams();
-        for (const key in data) formData.append(key, data[key]);
+    // --- Control Methods ---
 
-        try {
-            // FIX: Request goes to constant baseUrl, not baseUrl/action
-            const res = await fetch(this.baseUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/json'
-                },
-                body: formData
-            });
-            
-            // Handle non-JSON responses (like 405/500 HTML errors)
-            const text = await res.text();
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error(`[NektoClient] Invalid JSON response for ${action}:`, text.substring(0, 100));
-                throw new Error('Server returned invalid JSON (possibly 405/500 error)');
-            }
-        } catch (e) {
-            console.error(`NektoClient Error [${action}]:`, e);
-            this.trigger('onError', e);
-            return null;
-        }
-    }
-
-    _getAgeId(age) {
-        age = parseInt(age);
-        if (age >= 18 && age <= 25) return '1';
-        if (age >= 26 && age <= 35) return '2';
-        if (age >= 36) return '3';
-        return '1';
-    }
-
-    // --- Main Actions ---
-
-    async startSearch(params = {}) {
-        this.stop(); 
-        this.isSearching = true;
-
-        const defaultParams = {
-            mySex: 'M',
-            myAge: 22,
-            wishSex: 'F',
-            wishAges: ['1'],
-            topic: 'adult'
-        };
-
-        const effectiveParams = Object.keys(params).length > 0 
-            ? { ...defaultParams, ...params }
-            : (this.lastParams || defaultParams);
-
-        this.lastParams = effectiveParams;
-
-        const myAgeId = this._getAgeId(effectiveParams.myAge);
-        let selage = '1';
-        if (Array.isArray(effectiveParams.wishAges)) {
-            selage = effectiveParams.wishAges.join(',');
-        } else {
-            selage = String(effectiveParams.wishAges);
-        }
-
-        const payload = {
-            mysex: effectiveParams.mySex,
-            myselage: myAgeId, 
-            sex: effectiveParams.wishSex,
-            selage: selage,
-            topic: effectiveParams.topic,
-            wish: [] 
-        };
-
-        console.log('[NektoClient] Searching:', payload);
-
-        // 1. Send Search Request
-        await this._request('search_company', payload);
+    start() {
+        if (this.isRunning) return;
+        this.isRunning = true;
+        this._startObserver();
+        this.trigger('onStatusChange', 'SEARCHING');
         
-        // 2. Start Polling Loop
-        this._startPolling();
-    }
-
-    async next() {
-        if (!this.lastParams) {
-            console.warn('[NektoClient] No previous settings found. Using defaults.');
+        // Если мы не в чате, нажимаем старт/далее
+        if (!this._isVisible(document.querySelector(this.DOM.chatStatus))) {
+            this.skip(); 
         }
-        await this.startSearch(this.lastParams || {});
-    }
-
-    async sendMessage(text) {
-        if (!this.chatId) return false;
-        await this._request('send_message', {
-            dialogId: this.chatId,
-            content: text,
-            msgType: 1
-        });
-        return true;
     }
 
     stop() {
-        this.isSearching = false;
-        if (this.chatId) {
-            this._request('close_dialog', { dialogId: this.chatId });
+        this.isRunning = false;
+        if (this.observer) this.observer.disconnect();
+        if (this.searchTimer) clearTimeout(this.searchTimer);
+        this.trigger('onStatusChange', 'IDLE');
+    }
+
+    /**
+     * Ищет следующего собеседника (нажимает кнопки пропуска/поиска)
+     */
+    skip() {
+        // Ищем кнопки "Начать новый чат", "Искать собеседника" или "Изменить"
+        const buttons = Array.from(document.querySelectorAll(this.DOM.nextBtns));
+        const target = buttons.find(b => {
+            const txt = b.innerText.toLowerCase();
+            return this._isVisible(b) && 
+                   (txt.includes('новый') || txt.includes('искать') || txt.includes('изменить'));
+        });
+
+        if (target) {
+            target.click();
+            return true;
         }
-        this._resetState();
+
+        // Если кнопка на главной
+        const mainStart = document.querySelector(this.DOM.startBtn);
+        if (this._isVisible(mainStart)) {
+            mainStart.click();
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Сложная имитация ввода текста с событиями клавиатуры
+     */
+    async sendMessage(text) {
+        const editor = document.querySelector(this.DOM.input);
+        const btn = document.querySelector(this.DOM.sendBtn);
+        
+        if (!editor || !btn) return false;
+
+        editor.focus();
+        editor.innerHTML = text.replace(/\n/g, '<br>'); // Вставляем HTML
+        
+        // Эмуляция событий, чтобы React/Vue/JQuery на сайте поняли, что текст изменился
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        editor.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        // Небольшая задержка перед кликом
+        await new Promise(r => setTimeout(r, 200));
+        
+        if (!btn.classList.contains('disabled')) {
+            btn.click();
+            return true;
+        }
+        return false;
     }
 
     // --- Internals ---
-    _resetState() {
-        this.chatId = null;
-        this.lastMsgId = 0;
-        if (this.pollingInterval) clearInterval(this.pollingInterval);
-        this.pollingInterval = null;
+
+    _isVisible(el) {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
     }
 
-    _startPolling() {
-        if (this.pollingInterval) clearInterval(this.pollingInterval);
-        
-        this.pollingInterval = setInterval(async () => {
-            if (!this.isSearching && !this.chatId) return;
+    _startObserver() {
+        this.observer = new MutationObserver(() => this._scanDOM());
+        this.observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    }
 
-            const res = await this._request('read_messages', {
-                lastMsgId: this.lastMsgId
-            });
+    _scanDOM() {
+        if (!this.isRunning) return;
 
-            if (!res) return;
-
-            // 1. Connection Found
-            if (res.dialogId) {
-                if (this.chatId !== res.dialogId) {
-                    this.chatId = res.dialogId;
-                    this.myId = res.id;
-                    this.isSearching = false;
-                    this.trigger('onConnect', this.chatId);
-                }
-            }
-
-            // 2. Partner Left / Chat Closed
-            if (res.notice === 'leaved' || res.status === 'closed') {
-                this.chatId = null;
+        // 1. Проверка: ЧАТ ЗАВЕРШЕН?
+        const endScreen = document.querySelector(this.DOM.endScreen);
+        if (endScreen && this._isVisible(endScreen)) {
+            if (this.isInChat) {
+                this.isInChat = false;
                 this.trigger('onDisconnect');
-                return;
+                this.trigger('onStatusChange', 'DISCONNECTED');
             }
+            return; // Дальше не проверяем сообщения, если чат мертв
+        }
 
-            // 3. New Messages
-            if (res.messages && Array.isArray(res.messages)) {
-                res.messages.forEach(msg => {
-                    const mId = parseInt(msg.id);
-                    if (mId > this.lastMsgId) {
-                        this.lastMsgId = mId;
-                        this.trigger('onMessage', {
-                            id: mId,
-                            text: msg.message || msg.content,
-                            senderId: msg.senderId || msg.authId,
-                            raw: msg
-                        });
-                    }
-                });
+        // 2. Проверка: МЫ В ЧАТЕ?
+        const statusLine = document.querySelector(this.DOM.chatStatus);
+        const inChatNow = statusLine && this._isVisible(statusLine);
+
+        if (inChatNow && !this.isInChat) {
+            // Только что соединились
+            this.isInChat = true;
+            this.lastMsgCount = 0; // Сброс счетчика
+            
+            // Получаем ID чата из DOM (иногда он есть в атрибутах) или просто генерируем timestamp
+            const chatId = Date.now().toString().slice(-6); 
+            this.trigger('onConnect', chatId);
+            this.trigger('onStatusChange', 'CHATTING');
+        }
+
+        // 3. Обработка сообщений
+        if (this.isInChat) {
+            const msgs = document.querySelectorAll(this.DOM.msgBlock);
+            if (msgs.length > this.lastMsgCount) {
+                // Нашли новые сообщения
+                for (let i = this.lastMsgCount; i < msgs.length; i++) {
+                    const msgEl = msgs[i];
+                    const isMe = msgEl.classList.contains(this.DOM.selfMsgClass);
+                    const text = msgEl.innerText;
+
+                    this.trigger('onMessage', {
+                        text: text,
+                        isSelf: isMe,
+                        id: i
+                    });
+                }
+                this.lastMsgCount = msgs.length;
             }
-        }, 1500); 
+        }
     }
 }
