@@ -67,20 +67,31 @@ class NektoClient {
      * Ищет следующего собеседника (нажимает кнопки пропуска/поиска)
      */
     skip() {
-        // Ищем кнопки "Начать новый чат", "Искать собеседника" или "Изменить"
         const buttons = Array.from(document.querySelectorAll(this.DOM.nextBtns));
-        const target = buttons.find(b => {
+        
+        // 1. ПРИОРИТЕТ: Ищем кнопку "Начать новый чат" или "Искать собеседника"
+        // Это предотвращает клик по кнопке "Изменить параметры", которая идет первой в DOM
+        let target = buttons.find(b => {
             const txt = b.innerText.toLowerCase();
-            return this._isVisible(b) && 
-                   (txt.includes('новый') || txt.includes('искать') || txt.includes('изменить'));
+            return this._isVisible(b) && (txt.includes('новый') || txt.includes('искать'));
         });
 
+        // 2. ЗАПАСНОЙ ВАРИАНТ: Если кнопки "Новый" нет, пробуем другие (например, "Изменить")
+        // Используем это только если основной кнопки нет
+        if (!target) {
+            target = buttons.find(b => {
+                const txt = b.innerText.toLowerCase();
+                return this._isVisible(b) && txt.includes('изменить');
+            });
+        }
+
         if (target) {
+            console.log('[NektoClient] Clicking button:', target.innerText);
             target.click();
             return true;
         }
 
-        // Если кнопка на главной
+        // 3. Кнопка на главной странице (если мы вылетели в меню)
         const mainStart = document.querySelector(this.DOM.startBtn);
         if (this._isVisible(mainStart)) {
             mainStart.click();
