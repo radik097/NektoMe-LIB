@@ -29,9 +29,9 @@
 
         // Параметры поиска
         mySex: GM_getValue('mySex', 'M'),
-        myAge: GM_getValue('myAge', '18-25'), // 18-25, 26-35, 36+
+        myAge: GM_getValue('myAge', '18'), // 18, 26, 36
         wishSex: GM_getValue('wishSex', 'F'),
-        wishAge: GM_getValue('wishAge', '18-25'),
+        wishAge: GM_getValue('wishAge', '18'),
         topic: GM_getValue('topic', 'adult'),
 
         // UI
@@ -151,9 +151,9 @@
                             <option value="F">Я: Девушка</option>
                         </select>
                         <select id="nm-my-age" title="Мой возраст">
-                            <option value="18-25">Мне: 18-25</option>
-                            <option value="26-35">Мне: 26-35</option>
-                            <option value="36+">Мне: 36+</option>
+                            <option value="18">Мне: 18-25</option>
+                            <option value="26">Мне: 26-35</option>
+                            <option value="36">Мне: 36+</option>
                         </select>
                     </div>
                     <div class="nm-col">
@@ -162,9 +162,9 @@
                             <option value="M">Ищу: Парня</option>
                         </select>
                         <select id="nm-wish-age" title="Возраст собеседника">
-                            <option value="18-25">Им: 18-25</option>
-                            <option value="26-35">Им: 26-35</option>
-                            <option value="36+">Им: 36+</option>
+                            <option value="18">Им: 18-25</option>
+                            <option value="26">Им: 26-35</option>
+                            <option value="36">Им: 36+</option>
                         </select>
                     </div>
                 </div>
@@ -305,11 +305,12 @@
         if (!container) return;
         const buttons = container.querySelectorAll('button');
 
-        // Поиск по тексту (например "18-25") или по атрибутам
         for (let btn of buttons) {
             const txt = btn.innerText.trim();
-            // Простая проверка вхождения
-            if (txt.includes(textOrValue) || (textOrValue === 'adult' && txt.includes('18+')) || (textOrValue === 'normal' && txt.includes('общение'))) {
+            // Проверка: точное вхождение для коротких значений (18, 26) или частичное для текста
+            if (txt.includes(textOrValue) ||
+                (textOrValue === 'adult' && txt.includes('18+')) ||
+                (textOrValue === 'normal' && txt.includes('общение'))) {
                 btn.click();
                 return;
             }
@@ -325,32 +326,107 @@
         // 1. Тема (.topicRow)
         clickByText('.topicRow', SETTINGS.topic);
 
-        // 2. Пол и возраст
-        clickByText('.sexRow', SETTINGS.mySex);
-        clickByText('.ageRow', SETTINGS.myAge);
+        // 2. Мой пол (.sexRow .twoBtns:first-child)
+        // На сайте "М" и "Ж" кнопки.
+        const mySexLabel = SETTINGS.mySex === 'M' ? 'М' : 'Ж';
+        clickByText('.sexRow .btn-group', mySexLabel);
 
-        // 3. Желаемый пол и возраст
-        clickByText('.wishSexRow', SETTINGS.wishSex);
-        clickByText('.wishAgeRow', SETTINGS.wishAge);
+        // 3. Пол собеседника (.sexRow .wishSex)
+        const wishSexLabel = SETTINGS.wishSex === 'M' ? 'М' : 'Ж';
+        clickByText('.sexRow .wishSex', wishSexLabel);
 
-        // 4. Авто-следующий
-        UI.auto.checked = SETTINGS.autoNext;
+        await new Promise(r => setTimeout(r, 100));
 
-        // 5. Задержка ответа
-        UI.rngReply.value = SETTINGS.replyDelay;
-        UI.valReply.innerText = SETTINGS.replyDelay + ' ms';
+        // 4. Возраст (сложнее, там два блока .s-age)
+        // Первый блок - мой возраст, второй - собеседника
+        const ageBlocks = document.querySelectorAll('.row-search .s-age');
+        if (ageBlocks.length >= 2) {
+            // Мой возраст
+            const myAgeBtns = ageBlocks[0].querySelectorAll('button');
+            myAgeBtns.forEach(btn => {
+                if (btn.innerText.includes(SETTINGS.myAge)) btn.click();
+            });
 
-        // 6. Задержка поиска
-        UI.rngSearch.value = SETTINGS.searchDelay;
-        UI.valSearch.innerText = SETTINGS.searchDelay + ' ms';
+            // Возраст собеседника
+            const wishAgeBtns = ageBlocks[1].querySelectorAll('button');
+            wishAgeBtns.forEach(btn => {
+                if (btn.innerText.includes(SETTINGS.wishAge)) btn.click();
+            });
+        }
 
-        // 7. Текст ответа
-        UI.text.value = SETTINGS.replyText;
-
-        // 8. Сохранение
-        save();
-
-        UI.status.innerText = "FILTERS APPLIED!";
+        UI.status.innerText = "FILTERS DONE";
     };
+
+
+    // --- BOT LOGIC ---
+
+    const setRunningState = (run) => {
+        if (run) {
+            UI.start.style.display = 'none';
+            UI.stop.style.display = 'block';
+            UI.status.classList.add('st-active');
+        } else {
+            UI.start.style.display = 'block';
+            UI.stop.style.display = 'none';
+            UI.status.classList.remove('st-active');
+            UI.status.innerText = "IDLE";
+        }
+    };
+
+    UI.start.onclick = async () => {
+        await applyFilters();
+        client.start();
+        setRunningState(true);
+        UI.status.innerText = "SEARCHING...";
+    };
+
+    UI.stop.onclick = () => {
+        client.stop();
+        setRunningState(false);
+    };
+
+    UI.skip.onclick = () => {
+        client.skip();
+    };
+
+    // --- EVENTS ---
+
+    client.on('onConnect', (id) => {
+        UI.status.innerText = `CHAT: ${id}`;
+        hasReplied = false;
+        // Эффект появления
+        anime({ targets: UI.status, scale: [1, 1.1, 1], duration: 300 });
+    });
+
+    client.on('onMessage', (msg) => {
+        // Если сообщение чужое и мы еще не ответили
+        if (!msg.isSelf && !hasReplied) {
+            hasReplied = true;
+            UI.status.innerText = `REPLY IN ${SETTINGS.replyDelay}ms`;
+
+            setTimeout(() => {
+                if (client.isRunning) {
+                    client.sendMessage(SETTINGS.replyText);
+                    UI.status.innerText = "SENT";
+                }
+            }, SETTINGS.replyDelay);
+        }
+    });
+
+    client.on('onDisconnect', () => {
+        UI.status.innerText = "DISCONNECTED";
+        if (SETTINGS.autoNext) {
+            UI.status.innerText = `NEXT IN ${SETTINGS.searchDelay}ms`;
+            setTimeout(() => {
+                if (client.isRunning) {
+                    client.skip();
+                    UI.status.innerText = "SEARCHING...";
+                }
+            }, SETTINGS.searchDelay);
+        } else {
+            client.stop();
+            setRunningState(false);
+        }
+    });
 
 })();
